@@ -8,6 +8,7 @@ on:
       - '.github/workflows/full-real-pipeline.yml'
       - 'scripts/full_real_bootstrap.py'
       - 'scripts/build_conservative_overrides.py'
+      - 'scripts/build_real_market_layer.py'
       - 'scripts/h1_real_data_audit.py'
       - 'requirements-full.txt'
 
@@ -61,6 +62,13 @@ jobs:
           python scripts/build_conservative_overrides.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
 
+      - name: Build PIT total-return benchmark labels and real market factors
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/build_real_market_layer.py \
+            --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+
       - name: Run strict H1 real-data audit
         id: h1audit
         if: always()
@@ -97,12 +105,14 @@ jobs:
         run: |
           echo '=== Bootstrap ==='
           cat real_pipeline/reports/real_bootstrap_status.json 2>/dev/null || true
+          echo '=== Market Layer ==='
+          cat real_pipeline/ashare-lake/openpit_features/market_layer_summary.json 2>/dev/null || true
           echo '=== H1 Audit ==='
           cat real_pipeline/reports/h1_real_data_audit.json 2>/dev/null || true
           echo '=== Overrides ==='
           cat real_pipeline/ashare-lake/openpit_overrides/override_build_summary.json 2>/dev/null || true
 
-      - name: Upload audit/status package
+      - name: Upload audit/status/feature package
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -110,6 +120,7 @@ jobs:
           path: |
             real_pipeline/reports/
             real_pipeline/ashare-lake/openpit_overrides/
+            real_pipeline/ashare-lake/openpit_features/
             real_pipeline/logs/
           retention-days: 14
           compression-level: 6
@@ -127,7 +138,7 @@ jobs:
         if: always()
         run: |
           python - <<'PY'
-          import json, pathlib, sys
+          import json, pathlib
           p=pathlib.Path('real_pipeline/reports/real_bootstrap_status.json')
           if not p.exists():
               raise SystemExit('bootstrap status missing')
