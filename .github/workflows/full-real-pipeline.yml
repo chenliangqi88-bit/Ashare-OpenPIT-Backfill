@@ -13,6 +13,7 @@ on:
       - 'scripts/h1_real_data_audit.py'
       - 'scripts/run_real_calibration.py'
       - 'scripts/finalize_production_pack.py'
+      - 'scripts/set_production_history_window.py'
       - 'requirements-full.txt'
 
 permissions:
@@ -40,13 +41,17 @@ jobs:
       - name: Install pinned real-data runtime
         run: pip install -r requirements-full.txt
 
+      - name: Set frozen Production history window 2008-2026
+        run: |
+          python scripts/set_production_history_window.py --start 2008-01-01
+
       - name: Runtime smoke
         run: |
           python --version
           asl --version
           asl catalog || true
 
-      - name: Build 2018-2026 real A-share data lake
+      - name: Build 2008-2026 real A-share data lake
         id: bootstrap
         run: |
           python scripts/full_real_bootstrap.py \
@@ -58,7 +63,7 @@ jobs:
         continue-on-error: true
         run: |
           CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-          asl backfill trading_status --start 2018-01-01 --end 2026-08-27 --config "$CFG"
+          asl backfill trading_status --start 2008-01-01 --end 2026-08-27 --config "$CFG"
 
       - name: Build conservative timestamp overrides and quarantine queues
         if: always()
@@ -151,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-openpit-status-audit-calibration
+          name: real-openpit-status-audit-calibration-2008-2026
           path: |
             real_pipeline/reports/
             real_pipeline/ashare-lake/openpit_overrides/
@@ -165,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-ashare-lake-2018-2026
+          name: real-ashare-lake-2008-2026
           path: real_pipeline/ashare-lake/
           retention-days: 3
           compression-level: 1
