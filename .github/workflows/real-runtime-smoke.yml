@@ -1,0 +1,42 @@
+name: Real Runtime Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/real-runtime-smoke.yml'
+      - 'requirements-full.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install pinned runtime
+        run: pip install -r requirements-full.txt
+      - name: Check CLI and catalog
+        run: |
+          python --version
+          pip show ashare-lake
+          asl --version
+          asl catalog
+      - name: Initialize temp config
+        run: |
+          rm -rf smoke_runtime
+          mkdir -p smoke_runtime
+          cd smoke_runtime
+          asl config init --data-root "$GITHUB_WORKSPACE/smoke_runtime/data" --force
+          asl config validate --config "$GITHUB_WORKSPACE/smoke_runtime/configs/ashare-lake.toml"
+      - name: Test data-source connectivity
+        continue-on-error: true
+        run: |
+          asl servers test --config "$GITHUB_WORKSPACE/smoke_runtime/configs/ashare-lake.toml"
