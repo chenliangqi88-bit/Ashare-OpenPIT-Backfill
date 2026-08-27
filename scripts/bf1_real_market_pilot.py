@@ -6,6 +6,7 @@ import numpy as np
 
 FIELDS = "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST"
 
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open('rb') as f:
@@ -13,14 +14,17 @@ def sha256_file(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+
 def get_bs():
     import baostock as bs
     return bs
+
 
 def login(bs):
     lg = bs.login()
     if lg.error_code != '0':
         raise RuntimeError(f'BaoStock login failed: {lg.error_code} {lg.error_msg}')
+
 
 def rs_to_df(rs):
     rows = []
@@ -30,14 +34,21 @@ def rs_to_df(rs):
         raise RuntimeError(f'BaoStock query error: {rs.error_code} {rs.error_msg}')
     return pd.DataFrame(rows, columns=rs.fields)
 
+
 def stock_basic_all(bs):
     rs = bs.query_stock_basic(code='', code_name='')
     d = rs_to_df(rs)
-    if len(d):
-        for c in ['ipoDate', 'outDate']:
-            if c in d:
-                d[c] = pd.to_datetime(d[c], errors='coerce')
-    return d
+    if d.empty:
+        return d
+    for c in ['ipoDate', 'outDate']:
+        if c in d:
+            d[c] = pd.to_datetime(d[c], errors='coerce')
+    if 'type' in d:
+        d = d[d['type'].astype(str).eq('1')].copy()
+    if 'code' in d:
+        d = d[d['code'].astype(str).str.match(r'^(sh|sz|bj)\.')].copy()
+    return d.reset_index(drop=True)
+
 
 def calendar(bs, year):
     rs = bs.query_trade_dates(start_date=f'{year}-01-01', end_date=f'{year}-12-31')
@@ -47,34 +58,43 @@ def calendar(bs, year):
         d['is_trading_day'] = pd.to_numeric(d['is_trading_day'], errors='coerce').fillna(0).astype(int)
     return d
 
-def snapshot_codes(bs, days):
+
+def snapshot_codes(bs, days, allowed_stock_codes):
     codes = set()
+    allowed = set(allowed_stock_codes)
     for day in days:
         rs = bs.query_all_stock(day=pd.Timestamp(day).strftime('%Y-%m-%d'))
         try:
             d = rs_to_df(rs)
             if 'code' in d:
-                codes.update(d['code'].dropna().astype(str))
+                snap = set(d['code'].dropna().astype(str))
+                codes.update(snap & allowed)
         except Exception:
             pass
         time.sleep(0.03)
     return sorted(codes)
 
+
 def codes_for_year(bs, year, cal):
     d = stock_basic_all(bs)
     y0 = pd.Timestamp(f'{year}-01-01')
     y1 = pd.Timestamp(f'{year}-12-31')
-    codes = []
-    if len(d) and {'code', 'ipoDate', 'outDate'}.issubset(d.columns):
+    if d.empty or 'code' not in d.columns:
+        raise RuntimeError('query_stock_basic returned no type=1 stock universe')
+    stock_universe = set(d['code'].dropna().astype(str))
+    if {'ipoDate', 'outDate'}.issubset(d.columns):
         ipo = pd.to_datetime(d['ipoDate'], errors='coerce')
         out = pd.to_datetime(d['outDate'], errors='coerce')
-        mask = (ipo.isna() | (ipo <= y1)) & (out.isna() | (out >= y0))
-        codes = sorted(d.loc[mask, 'code'].dropna().astype(str).unique())
+        overlap = (ipo.isna() | (ipo <= y1)) & (out.isna() | (out >= y0))
+        codes = set(d.loc[overlap, 'code'].dropna().astype(str))
+    else:
+        codes = set(stock_universe)
     trade = cal.loc[cal['is_trading_day'].eq(1), 'calendar_date'].sort_values()
     if len(trade):
         month_ends = trade.groupby(trade.dt.to_period('M')).max().tolist()
-        codes = sorted(set(codes) | set(snapshot_codes(bs, month_ends)))
-    return codes
+        codes |= set(snapshot_codes(bs, month_ends, stock_universe))
+    return sorted(codes)
+
 
 def pull_one(bs, code, year, retries=3):
     last = None
@@ -110,6 +130,7 @@ def pull_one(bs, code, year, retries=3):
             time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f'{code}: {last}')
 
+
 def audit_chunk(d):
     errors = []
     if d.duplicated(['trade_date', 'security_id']).any():
@@ -125,6 +146,7 @@ def audit_chunk(d):
     if (d['volume'].dropna() < 0).any() or (d['amount'].dropna() < 0).any():
         errors.append('negative volume/amount')
     return errors
+
 
 def run_shard(year, shard, shards, out_dir, chunk_size=150):
     bs = get_bs()
@@ -178,10 +200,11 @@ def run_shard(year, shard, shards, out_dir, chunk_size=150):
         'chunks': chunks,
         'calendar_trading_days': int(cal['is_trading_day'].sum()) if len(cal) else 0,
         'status': 'PASS' if totals > 0 and security_success > 0 else 'FAIL',
-        'semantic_status': 'REAL_BAOSTOCK_UNADJUSTED_MARKET_BOOTSTRAP_ONLY__OFFICIAL_OVERRIDE_PENDING'
+        'semantic_status': 'REAL_BAOSTOCK_TYPE1_UNADJUSTED_MARKET_BOOTSTRAP_ONLY__OFFICIAL_OVERRIDE_PENDING'
     }
     (out_dir / f'summary_{year}_shard{shard}.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     return result
+
 
 def aggregate(root, out):
     root = Path(root)
@@ -216,6 +239,7 @@ def aggregate(root, out):
     Path(out).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
+
 def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest='cmd', required=True)
@@ -232,6 +256,7 @@ def main():
         print(json.dumps(run_shard(a.year, a.shard, a.shards, a.out_dir), ensure_ascii=False, indent=2))
     else:
         aggregate(a.root, a.out)
+
 
 if __name__ == '__main__':
     main()
