@@ -7,6 +7,10 @@ on:
     paths:
       - '.github/workflows/real-runtime-smoke.yml'
       - 'requirements-full.txt'
+      - 'scripts/build_real_factor_panel.py'
+      - 'scripts/run_real_calibration.py'
+      - 'scripts/finalize_production_pack.py'
+      - 'scripts/set_production_history_window.py'
 
 permissions:
   contents: read
@@ -21,8 +25,13 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+      - name: Compile all Python scripts
+        run: |
+          python -m py_compile scripts/*.py
       - name: Install pinned runtime
-        run: pip install -r requirements-full.txt
+        run: |
+          pip install -r requirements-full.txt
+          pip check
       - name: Check CLI and catalog
         run: |
           python --version
