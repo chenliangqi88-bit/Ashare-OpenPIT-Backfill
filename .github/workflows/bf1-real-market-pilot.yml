@@ -7,6 +7,7 @@ on:
       - '.github/workflows/bf1-real-market-pilot.yml'
       - 'scripts/bf1_real_market_pilot.py'
       - 'requirements.txt'
+  pull_request:
 
 permissions:
   contents: read
