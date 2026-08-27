@@ -9,7 +9,10 @@ on:
       - 'scripts/full_real_bootstrap.py'
       - 'scripts/build_conservative_overrides.py'
       - 'scripts/build_real_market_layer.py'
+      - 'scripts/build_real_factor_panel.py'
       - 'scripts/h1_real_data_audit.py'
+      - 'scripts/run_real_calibration.py'
+      - 'scripts/finalize_production_pack.py'
       - 'requirements-full.txt'
 
 permissions:
@@ -52,24 +55,33 @@ jobs:
 
       - name: Backfill historical ST/suspension status
         if: always()
+        continue-on-error: true
         run: |
           CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl backfill trading_status --start 2018-01-01 --end 2026-08-27 --config "$CFG"
 
       - name: Build conservative timestamp overrides and quarantine queues
         if: always()
+        continue-on-error: true
         run: |
           python scripts/build_conservative_overrides.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
 
-      - name: Build PIT total-return benchmark labels and real market factors
+      - name: Build PIT total-return benchmarks and 20/60/120 exact-session labels
         if: always()
         continue-on-error: true
         run: |
           python scripts/build_real_market_layer.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
 
-      - name: Run strict H1 real-data audit
+      - name: Build real F01-F55 panel with Missing preserved
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/build_real_factor_panel.py \
+            --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+
+      - name: Run strict H1 real-data audit after BF3 artifacts exist
         id: h1audit
         if: always()
         continue-on-error: true
@@ -99,6 +111,25 @@ jobs:
           print(out.read_text())
           PY
 
+      - name: Run purged walk-forward real calibration
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/run_real_calibration.py \
+            --factor-panel "$GITHUB_WORKSPACE/real_pipeline/ashare-lake/openpit_features/factor_panel_wide.parquet" \
+            --out "$GITHUB_WORKSPACE/real_pipeline/calibration" \
+            --cost-bps 20
+
+      - name: Apply H1 two-key Production lock
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/finalize_production_pack.py \
+            --calibration-pack "$GITHUB_WORKSPACE/real_pipeline/calibration/production_parameter_pack.json" \
+            --h1-audit "$GITHUB_WORKSPACE/real_pipeline/reports/h1_real_data_audit.json" \
+            --manifest "$GITHUB_WORKSPACE/real_pipeline/reports/dataset_manifest.json" \
+            --out "$GITHUB_WORKSPACE/real_pipeline/calibration/FINAL_Production_Parameter_Pack.json"
+
       - name: Show final status reports
         if: always()
         shell: bash
@@ -107,20 +138,25 @@ jobs:
           cat real_pipeline/reports/real_bootstrap_status.json 2>/dev/null || true
           echo '=== Market Layer ==='
           cat real_pipeline/ashare-lake/openpit_features/market_layer_summary.json 2>/dev/null || true
+          echo '=== Factor Panel ==='
+          cat real_pipeline/ashare-lake/openpit_features/factor_panel_summary.json 2>/dev/null || true
           echo '=== H1 Audit ==='
           cat real_pipeline/reports/h1_real_data_audit.json 2>/dev/null || true
-          echo '=== Overrides ==='
-          cat real_pipeline/ashare-lake/openpit_overrides/override_build_summary.json 2>/dev/null || true
+          echo '=== Calibration ==='
+          cat real_pipeline/calibration/calibration_summary.json 2>/dev/null || true
+          echo '=== Final Production Pack ==='
+          cat real_pipeline/calibration/FINAL_Production_Parameter_Pack.json 2>/dev/null || true
 
-      - name: Upload audit/status/feature package
+      - name: Upload audit feature calibration and Production pack
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-openpit-status-and-audit
+          name: real-openpit-status-audit-calibration
           path: |
             real_pipeline/reports/
             real_pipeline/ashare-lake/openpit_overrides/
             real_pipeline/ashare-lake/openpit_features/
+            real_pipeline/calibration/
             real_pipeline/logs/
           retention-days: 14
           compression-level: 6
@@ -134,7 +170,7 @@ jobs:
           retention-days: 3
           compression-level: 1
 
-      - name: Enforce bootstrap success
+      - name: Enforce bootstrap success only
         if: always()
         run: |
           python - <<'PY'
@@ -145,5 +181,5 @@ jobs:
           j=json.loads(p.read_text(encoding='utf-8'))
           if not j.get('real_bootstrap_pass'):
               raise SystemExit('REAL_BOOTSTRAP did not pass; see artifact logs')
-          print('REAL_BOOTSTRAP_PASS. Strict PIT may still be blocked; see H1 audit.')
+          print('REAL_BOOTSTRAP_PASS. Final Production status is governed separately by H1 + calibration gates.')
           PY
