@@ -1,0 +1,73 @@
+name: BF1 Real Market Pilot 2018-2026
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/bf1-real-market-pilot.yml'
+      - 'scripts/bf1_real_market_pilot.py'
+      - 'requirements.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  real-market-shards:
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        year: [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Pull real BaoStock unadjusted market shard
+        run: |
+          python scripts/bf1_real_market_pilot.py run-shard \
+            --year ${{ matrix.year }} \
+            --shard ${{ matrix.shard }} \
+            --shards 4 \
+            --out-dir output/${{ matrix.year }}/shard${{ matrix.shard }}
+      - name: Upload shard artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bf1-${{ matrix.year }}-s${{ matrix.shard }}
+          path: output/${{ matrix.year }}/shard${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 1
+
+  aggregate:
+    needs: real-market-shards
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download all shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bf1-*
+          path: collected
+      - name: Aggregate pilot status
+        run: |
+          python scripts/bf1_real_market_pilot.py aggregate \
+            --root collected \
+            --out bf1_market_pilot_2018_2026.json
+      - name: Upload aggregate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bf1-market-pilot-summary
+          path: bf1_market_pilot_2018_2026.json
+          retention-days: 7
