@@ -58,45 +58,38 @@ jobs:
             --workspace "$GITHUB_WORKSPACE/real_pipeline" \
             --profile full
 
+      # IMPORTANT: all heavy downstream steps are fail-fast.  The previous
+      # workflow used if: always(), so a failed multi-hour bootstrap was
+      # followed by another long backfill until the 6-hour job limit cancelled
+      # the runner before diagnostic artifacts could be uploaded.
       - name: Backfill historical ST/suspension status
-        if: always()
-        continue-on-error: true
         run: |
           CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl backfill trading_status --start 2008-01-01 --end 2026-08-27 --config "$CFG"
 
       - name: Build conservative timestamp overrides and quarantine queues
-        if: always()
-        continue-on-error: true
         run: |
           python scripts/build_conservative_overrides.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
 
       - name: Build PIT total-return benchmarks and 20/60/120 exact-session labels
-        if: always()
-        continue-on-error: true
         run: |
           python scripts/build_real_market_layer.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
 
       - name: Build real F01-F55 panel with Missing preserved
-        if: always()
-        continue-on-error: true
         run: |
           python scripts/build_real_factor_panel.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
 
       - name: Run strict H1 real-data audit after BF3 artifacts exist
         id: h1audit
-        if: always()
-        continue-on-error: true
         run: |
           python scripts/h1_real_data_audit.py \
             --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" \
             --reports "$GITHUB_WORKSPACE/real_pipeline/reports"
 
       - name: Create immutable dataset manifest
-        if: always()
         shell: bash
         run: |
           python - <<'PY'
@@ -117,8 +110,6 @@ jobs:
           PY
 
       - name: Run purged walk-forward real calibration
-        if: always()
-        continue-on-error: true
         run: |
           python scripts/run_real_calibration.py \
             --factor-panel "$GITHUB_WORKSPACE/real_pipeline/ashare-lake/openpit_features/factor_panel_wide.parquet" \
@@ -126,8 +117,6 @@ jobs:
             --cost-bps 20
 
       - name: Apply H1 two-key Production lock
-        if: always()
-        continue-on-error: true
         run: |
           python scripts/finalize_production_pack.py \
             --calibration-pack "$GITHUB_WORKSPACE/real_pipeline/calibration/production_parameter_pack.json" \
@@ -135,12 +124,14 @@ jobs:
             --manifest "$GITHUB_WORKSPACE/real_pipeline/reports/dataset_manifest.json" \
             --out "$GITHUB_WORKSPACE/real_pipeline/calibration/FINAL_Production_Parameter_Pack.json"
 
-      - name: Show final status reports
+      - name: Show status and diagnostic reports
         if: always()
         shell: bash
         run: |
           echo '=== Bootstrap ==='
           cat real_pipeline/reports/real_bootstrap_status.json 2>/dev/null || true
+          echo '=== Bootstrap workspace inventory ==='
+          find real_pipeline -maxdepth 3 -type f -printf '%p\t%s bytes\n' 2>/dev/null | sort | head -500 || true
           echo '=== Market Layer ==='
           cat real_pipeline/ashare-lake/openpit_features/market_layer_summary.json 2>/dev/null || true
           echo '=== Factor Panel ==='
@@ -152,11 +143,12 @@ jobs:
           echo '=== Final Production Pack ==='
           cat real_pipeline/calibration/FINAL_Production_Parameter_Pack.json 2>/dev/null || true
 
-      - name: Upload audit feature calibration and Production pack
+      - name: Upload audit diagnostics and Production outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-openpit-status-audit-calibration-2008-2026
+          if-no-files-found: warn
           path: |
             real_pipeline/reports/
             real_pipeline/ashare-lake/openpit_overrides/
@@ -167,7 +159,7 @@ jobs:
           compression-level: 6
 
       - name: Upload real data lake
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: real-ashare-lake-2008-2026
@@ -176,7 +168,6 @@ jobs:
           compression-level: 1
 
       - name: Enforce bootstrap success only
-        if: always()
         run: |
           python - <<'PY'
           import json, pathlib
