@@ -32,12 +32,11 @@ jobs:
         run: |
           pip install -r requirements-full.txt
           pip check
-      - name: Check CLI and catalog
+      - name: Check CLI version
         run: |
           python --version
           pip show ashare-lake
           asl --version
-          asl catalog
       - name: Initialize temp config
         run: |
           rm -rf smoke_runtime
@@ -45,6 +44,9 @@ jobs:
           cd smoke_runtime
           asl config init --data-root "$GITHUB_WORKSPACE/smoke_runtime/data" --force
           asl config validate --config "$GITHUB_WORKSPACE/smoke_runtime/configs/ashare-lake.toml"
+      - name: Check catalog with initialized config
+        run: |
+          asl catalog --config "$GITHUB_WORKSPACE/smoke_runtime/configs/ashare-lake.toml"
       - name: Test data-source connectivity
         continue-on-error: true
         run: |
