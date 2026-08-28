@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: full-real-openpit-rescue
@@ -17,9 +18,10 @@ concurrency:
 env:
   PYTHONUTF8: '1'
   PYTHONUNBUFFERED: '1'
+  CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
 
 jobs:
-  stage1-base-lake:
+  stage1-resume-core-lake:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -29,50 +31,42 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements-full.txt
-      - name: Lock 2008-2026 window
-        run: python scripts/set_production_history_window.py --start 2008-01-01
-      - name: Initialize base lake serially and deepen history
+      - name: Restore prior Stage 1 checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: rescue-stage1-base-lake
+          path: real_pipeline
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
+          run-id: 33140866751
+      - name: Rebind config and lock Production window
         run: |
           set -euo pipefail
-          rm -rf real_pipeline
+          python scripts/set_production_history_window.py --start 2008-01-01
           mkdir -p real_pipeline
           cd real_pipeline
-          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
-          # ashare-lake 0.6.0 can race Baostock's process-global login state when
-          # reference steps run in parallel. Force the orchestrator to one worker;
-          # this changes execution scheduling only, not dataset/model semantics.
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-          asl servers test --config "$CFG" || true
-          for attempt in 1 2; do
-            if asl init --profile full --config "$CFG"; then
-              break
-            fi
-            if [ "$attempt" -eq 2 ]; then exit 1; fi
-            sleep 30
-          done
+      - name: Complete critical base lake without re-running full init
+        run: |
+          set -euo pipefail
           asl delisted backfill --config "$CFG"
-          # Full profile does not guarantee a 2008 start. Deepen the critical
-          # market/event histories explicitly to the frozen Production window.
           asl backfill daily_bars --start 2008-01-01 --end 2026-08-27 --config "$CFG"
           asl backfill index_bars --start 2008-01-01 --end 2026-08-27 --config "$CFG"
           asl backfill corporate_actions --start 2008-01-01 --end 2026-08-27 --config "$CFG"
           asl derive adj_factors --config "$CFG"
-      - name: Base status
-        if: always()
-        run: asl status --datasets --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
-      - name: Upload stage 1 checkpoint
+      - name: Upload resumed core checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-stage1-base-lake
+          name: rescue-stage1-core-complete
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
 
   stage2a-disclosure-financial:
-    needs: stage1-base-lake
+    needs: stage1-resume-core-lake
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -84,33 +78,28 @@ jobs:
       - run: pip install -r requirements-full.txt
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-stage1-base-lake
+          name: rescue-stage1-core-complete
           path: real_pipeline
-      - name: Rebind config to current runner
+      - name: Rebind config
         run: |
-          set -euo pipefail
           cd real_pipeline
-          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
       - name: Financial PIT backfill
-        run: asl backfill financial_statement_items --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+        run: asl backfill financial_statement_items --start 2008-01-01 --end 2026-08-27 --config "$CFG"
       - name: Announcement PIT backfill with bounded retry
         run: |
           set -euo pipefail
-          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           for attempt in 1 2 3; do
-            if asl backfill announcement_index --start 2008-01-01 --end 2026-08-27 --config "$CFG"; then
-              exit 0
-            fi
+            if asl backfill announcement_index --start 2008-01-01 --end 2026-08-27 --config "$CFG"; then exit 0; fi
             if [ "$attempt" -eq 3 ]; then exit 1; fi
             sleep $((attempt * 60))
           done
       - name: Earnings schedule
         continue-on-error: true
-        run: asl backfill earnings_disclosure_schedule --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Upload stage 2a checkpoint
+        run: asl backfill earnings_disclosure_schedule --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Upload Stage 2a checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -119,7 +108,7 @@ jobs:
           retention-days: 3
           compression-level: 1
 
-  stage2b-market-macro-status:
+  stage2b-market-macro:
     needs: stage2a-disclosure-financial
     runs-on: ubuntu-latest
     timeout-minutes: 350
@@ -134,52 +123,77 @@ jobs:
         with:
           name: rescue-stage2a-financial-disclosure
           path: real_pipeline
-      - name: Rebind config to current runner
+      - name: Rebind config
         run: |
-          set -euo pipefail
           cd real_pipeline
-          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
       - name: Required valuation
-        run: asl backfill valuation_metrics --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+        run: asl backfill valuation_metrics --start 2008-01-01 --end 2026-08-27 --config "$CFG"
       - name: Required macro
-        run: asl backfill macro_indicators --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Historical ST and suspension
-        run: asl backfill trading_status --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Share structure
-        continue-on-error: true
-        run: asl backfill share_structure --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Margin trading
-        continue-on-error: true
-        run: asl backfill margin_trading --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Northbound flows
-        continue-on-error: true
-        run: asl backfill northbound_flows --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Industry members
-        continue-on-error: true
-        run: asl backfill industry_members --start 2020-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Event datasets
+        run: asl backfill macro_indicators --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Optional market/event datasets
         continue-on-error: true
         run: |
-          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          asl backfill share_structure --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill margin_trading --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill northbound_flows --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill industry_members --start 2020-01-01 --end 2026-08-27 --config "$CFG" || true
           asl backfill share_unlock_schedule --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
           asl backfill regulatory_events --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
           asl backfill block_trades --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
           asl backfill institutional_holdings --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
           asl derive adj_factors --config "$CFG"
-      - name: Upload stage 2b checkpoint
+      - name: Upload Stage 2b checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-stage2b-pit-core
+          name: rescue-stage2b-market-macro
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+
+  stage2c-trading-status:
+    needs: stage2b-market-macro
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-stage2b-market-macro
+          path: real_pipeline
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
+      - name: Historical ST and suspension bounded slice
+        timeout-minutes: 325
+        continue-on-error: true
+        run: asl backfill trading_status --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Trading-status audit snapshot
+        if: always()
+        run: asl status --datasets --config "$CFG" || true
+      - name: Upload trading-status checkpoint even if incomplete
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-stage2c-trading-status
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
 
   stage3-features-audit:
-    needs: stage2b-market-macro-status
+    needs: stage2c-trading-status
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -191,7 +205,7 @@ jobs:
       - run: pip install -r requirements-full.txt
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-stage2b-pit-core
+          name: rescue-stage2c-trading-status
           path: real_pipeline
       - name: Build PIT overrides
         continue-on-error: true
@@ -217,7 +231,7 @@ jobs:
           out=Path('real_pipeline/reports/dataset_manifest.json'); out.parent.mkdir(parents=True,exist_ok=True)
           out.write_text(json.dumps({'files':rows,'file_count':len(rows),'total_bytes':sum(x['bytes'] for x in rows)},ensure_ascii=False,indent=2),encoding='utf-8')
           PY
-      - name: Upload stage 3 checkpoint
+      - name: Upload Stage 3 checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -228,6 +242,7 @@ jobs:
 
   stage4-calibration-production:
     needs: stage3-features-audit
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -244,19 +259,12 @@ jobs:
       - name: Purged Walk-Forward calibration
         continue-on-error: true
         run: |
-          python scripts/run_real_calibration.py \
-            --factor-panel "$GITHUB_WORKSPACE/real_pipeline/ashare-lake/openpit_features/factor_panel_wide.parquet" \
-            --out "$GITHUB_WORKSPACE/real_pipeline/calibration" \
-            --cost-bps 20
+          python scripts/run_real_calibration.py --factor-panel "$GITHUB_WORKSPACE/real_pipeline/ashare-lake/openpit_features/factor_panel_wide.parquet" --out "$GITHUB_WORKSPACE/real_pipeline/calibration" --cost-bps 20
       - name: Apply H1 two-key Production lock
         if: always()
         continue-on-error: true
         run: |
-          python scripts/finalize_production_pack.py \
-            --calibration-pack "$GITHUB_WORKSPACE/real_pipeline/calibration/production_parameter_pack.json" \
-            --h1-audit "$GITHUB_WORKSPACE/real_pipeline/reports/h1_real_data_audit.json" \
-            --manifest "$GITHUB_WORKSPACE/real_pipeline/reports/dataset_manifest.json" \
-            --out "$GITHUB_WORKSPACE/real_pipeline/calibration/FINAL_Production_Parameter_Pack.json"
+          python scripts/finalize_production_pack.py --calibration-pack "$GITHUB_WORKSPACE/real_pipeline/calibration/production_parameter_pack.json" --h1-audit "$GITHUB_WORKSPACE/real_pipeline/reports/h1_real_data_audit.json" --manifest "$GITHUB_WORKSPACE/real_pipeline/reports/dataset_manifest.json" --out "$GITHUB_WORKSPACE/real_pipeline/calibration/FINAL_Production_Parameter_Pack.json"
       - name: Final status
         if: always()
         run: |
