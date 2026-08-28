@@ -1,0 +1,242 @@
+name: Full Real Open-PIT Pipeline Rescue
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Manual rescue path only. It deliberately uses a different concurrency group
+# so creating this file does not cancel the currently running monolithic job.
+concurrency:
+  group: full-real-openpit-rescue
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  stage1-base-lake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - name: Lock 2008-2026 window
+        run: python scripts/set_production_history_window.py --start 2008-01-01
+      - name: Initialize base lake
+        run: |
+          rm -rf real_pipeline
+          mkdir -p real_pipeline
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          asl config validate --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          asl servers test --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
+          asl init --profile full --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          asl delisted backfill --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          asl derive adj_factors --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Base status
+        if: always()
+        run: asl status --datasets --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
+      - name: Upload stage 1 checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-stage1-base-lake
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+
+  stage2a-disclosure-financial:
+    needs: stage1-base-lake
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-stage1-base-lake
+          path: real_pipeline
+      - name: Rebind config to current runner
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          asl config validate --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Financial PIT backfill
+        run: asl backfill financial_statement_items --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Announcement PIT backfill
+        run: asl backfill announcement_index --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Earnings schedule
+        continue-on-error: true
+        run: asl backfill earnings_disclosure_schedule --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Upload stage 2a checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-stage2a-financial-disclosure
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+
+  stage2b-market-macro-status:
+    needs: stage2a-disclosure-financial
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-stage2a-financial-disclosure
+          path: real_pipeline
+      - name: Rebind config to current runner
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          asl config validate --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Required valuation
+        run: asl backfill valuation_metrics --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Required macro
+        run: asl backfill macro_indicators --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Historical ST and suspension
+        run: asl backfill trading_status --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Share structure
+        continue-on-error: true
+        run: asl backfill share_structure --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Margin trading
+        continue-on-error: true
+        run: asl backfill margin_trading --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Northbound flows
+        continue-on-error: true
+        run: asl backfill northbound_flows --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Industry members
+        continue-on-error: true
+        run: asl backfill industry_members --start 2020-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Event datasets
+        continue-on-error: true
+        run: |
+          asl backfill share_unlock_schedule --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
+          asl backfill regulatory_events --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
+          asl backfill block_trades --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
+          asl backfill institutional_holdings --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
+          asl derive adj_factors --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Upload stage 2b checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-stage2b-pit-core
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+
+  stage3-features-audit:
+    needs: stage2b-market-macro-status
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-stage2b-pit-core
+          path: real_pipeline
+      - name: Build PIT overrides
+        continue-on-error: true
+        run: python scripts/build_conservative_overrides.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+      - name: Build benchmark and exact labels
+        run: python scripts/build_real_market_layer.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+      - name: Build F01-F55 panel
+        run: python scripts/build_real_factor_panel.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+      - name: Strict H1 audit
+        continue-on-error: true
+        run: python scripts/h1_real_data_audit.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --reports "$GITHUB_WORKSPACE/real_pipeline/reports"
+      - name: Immutable SHA256 manifest
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          root=Path('real_pipeline/ashare-lake'); rows=[]
+          for p in sorted(root.rglob('*.parquet')):
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for c in iter(lambda:f.read(1024*1024),b''): h.update(c)
+              rows.append({'path':p.relative_to(root).as_posix(),'bytes':p.stat().st_size,'sha256':h.hexdigest()})
+          out=Path('real_pipeline/reports/dataset_manifest.json'); out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_text(json.dumps({'files':rows,'file_count':len(rows),'total_bytes':sum(x['bytes'] for x in rows)},ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - name: Upload stage 3 checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-stage3-features-audit
+          path: real_pipeline/
+          retention-days: 7
+          compression-level: 2
+
+  stage4-calibration-production:
+    needs: stage3-features-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-stage3-features-audit
+          path: real_pipeline
+      - name: Purged Walk-Forward calibration
+        continue-on-error: true
+        run: |
+          python scripts/run_real_calibration.py \
+            --factor-panel "$GITHUB_WORKSPACE/real_pipeline/ashare-lake/openpit_features/factor_panel_wide.parquet" \
+            --out "$GITHUB_WORKSPACE/real_pipeline/calibration" \
+            --cost-bps 20
+      - name: Apply H1 two-key Production lock
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/finalize_production_pack.py \
+            --calibration-pack "$GITHUB_WORKSPACE/real_pipeline/calibration/production_parameter_pack.json" \
+            --h1-audit "$GITHUB_WORKSPACE/real_pipeline/reports/h1_real_data_audit.json" \
+            --manifest "$GITHUB_WORKSPACE/real_pipeline/reports/dataset_manifest.json" \
+            --out "$GITHUB_WORKSPACE/real_pipeline/calibration/FINAL_Production_Parameter_Pack.json"
+      - name: Final status
+        if: always()
+        run: |
+          cat real_pipeline/reports/h1_real_data_audit.json 2>/dev/null || true
+          cat real_pipeline/calibration/calibration_summary.json 2>/dev/null || true
+          cat real_pipeline/calibration/FINAL_Production_Parameter_Pack.json 2>/dev/null || true
+      - name: Upload final Production outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-final-openpit-production-pack
+          path: |
+            real_pipeline/reports/
+            real_pipeline/ashare-lake/openpit_overrides/
+            real_pipeline/ashare-lake/openpit_features/
+            real_pipeline/calibration/
+          retention-days: 14
+          compression-level: 6
