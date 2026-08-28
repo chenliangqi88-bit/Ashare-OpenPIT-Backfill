@@ -1,0 +1,330 @@
+name: Full Real Open-PIT Pipeline Rescue Sliced
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/full-real-pipeline-rescue-sliced.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: full-real-openpit-rescue-sliced
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONUNBUFFERED: '1'
+  CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
+
+jobs:
+  announce-2008-2012:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - name: Restore financial checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: rescue-cont-stage2a-financial-disclosure
+          path: real_pipeline
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
+          run-id: 33173202879
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
+      - name: Announcement 2008-2012
+        run: asl backfill announcement_index --start 2008-01-01 --end 2012-12-31 --config "$CFG"
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-ann-2012, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  announce-2013-2017:
+    needs: announce-2008-2012
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-ann-2012, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Announcement 2013-2017
+        run: asl backfill announcement_index --start 2013-01-01 --end 2017-12-31 --config "$CFG"
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-ann-2017, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  announce-2018-2022:
+    needs: announce-2013-2017
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-ann-2017, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Announcement 2018-2022
+        run: asl backfill announcement_index --start 2018-01-01 --end 2022-12-31 --config "$CFG"
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-ann-2022, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  announce-2023-2026:
+    needs: announce-2018-2022
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-ann-2022, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Announcement 2023-2026
+        run: asl backfill announcement_index --start 2023-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Earnings schedule
+        continue-on-error: true
+        run: asl backfill earnings_disclosure_schedule --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Upload disclosure checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-disclosure-complete, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  valuation-macro:
+    needs: announce-2023-2026
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-disclosure-complete, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Required valuation
+        run: asl backfill valuation_metrics --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Required macro
+        run: asl backfill macro_indicators --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Upload core PIT checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-core-pit, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  optional-market-events:
+    needs: valuation-macro
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-core-pit, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Optional market/event datasets
+        continue-on-error: true
+        run: |
+          asl backfill share_structure --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill margin_trading --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill northbound_flows --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill industry_members --start 2020-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill share_unlock_schedule --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill regulatory_events --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill block_trades --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill institutional_holdings --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl derive adj_factors --config "$CFG"
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-market-events, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  status-2008-2013:
+    needs: optional-market-events
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-market-events, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Trading status 2008-2013
+        run: asl backfill trading_status --start 2008-01-01 --end 2013-12-31 --config "$CFG"
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-status-2013, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  status-2014-2019:
+    needs: status-2008-2013
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-status-2013, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Trading status 2014-2019
+        run: asl backfill trading_status --start 2014-01-01 --end 2019-12-31 --config "$CFG"
+      - name: Upload checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-status-2019, path: real_pipeline/, retention-days: 3, compression-level: 1}
+
+  status-2020-2026:
+    needs: status-2014-2019
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-status-2019, path: real_pipeline}
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+      - name: Trading status 2020-2026
+        run: asl backfill trading_status --start 2020-01-01 --end 2026-08-27 --config "$CFG"
+      - name: Audit snapshot
+        if: always()
+        run: asl status --datasets --config "$CFG" || true
+      - name: Upload completed data checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-data-complete, path: real_pipeline/, retention-days: 7, compression-level: 1}
+
+  features-audit:
+    needs: status-2020-2026
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-data-complete, path: real_pipeline}
+      - name: PIT overrides
+        continue-on-error: true
+        run: python scripts/build_conservative_overrides.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+      - name: Exact 20/60/120 labels
+        run: python scripts/build_real_market_layer.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+      - name: F01-F55 panel
+        run: python scripts/build_real_factor_panel.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake"
+      - name: Strict H1 audit
+        continue-on-error: true
+        run: python scripts/h1_real_data_audit.py --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --reports "$GITHUB_WORKSPACE/real_pipeline/reports"
+      - name: Dataset manifest
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          root=Path('real_pipeline/ashare-lake'); rows=[]
+          for p in sorted(root.rglob('*.parquet')):
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for c in iter(lambda:f.read(1024*1024),b''): h.update(c)
+              rows.append({'path':p.relative_to(root).as_posix(),'bytes':p.stat().st_size,'sha256':h.hexdigest()})
+          out=Path('real_pipeline/reports/dataset_manifest.json'); out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_text(json.dumps({'files':rows,'file_count':len(rows),'total_bytes':sum(x['bytes'] for x in rows)},ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - name: Upload features/audit checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: rescue-sliced-features-audit, path: real_pipeline/, retention-days: 7, compression-level: 2}
+
+  calibration-production:
+    needs: features-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip}
+      - run: pip install -r requirements-full.txt
+      - uses: actions/download-artifact@v4
+        with: {name: rescue-sliced-features-audit, path: real_pipeline}
+      - name: Purged Walk-Forward calibration
+        continue-on-error: true
+        run: python scripts/run_real_calibration.py --factor-panel "$GITHUB_WORKSPACE/real_pipeline/ashare-lake/openpit_features/factor_panel_wide.parquet" --out "$GITHUB_WORKSPACE/real_pipeline/calibration" --cost-bps 20
+      - name: Two-key Production lock
+        if: always()
+        continue-on-error: true
+        run: python scripts/finalize_production_pack.py --calibration-pack "$GITHUB_WORKSPACE/real_pipeline/calibration/production_parameter_pack.json" --h1-audit "$GITHUB_WORKSPACE/real_pipeline/reports/h1_real_data_audit.json" --manifest "$GITHUB_WORKSPACE/real_pipeline/reports/dataset_manifest.json" --out "$GITHUB_WORKSPACE/real_pipeline/calibration/FINAL_Production_Parameter_Pack.json"
+      - name: Final status
+        if: always()
+        run: |
+          cat real_pipeline/reports/h1_real_data_audit.json 2>/dev/null || true
+          cat real_pipeline/calibration/calibration_summary.json 2>/dev/null || true
+          cat real_pipeline/calibration/FINAL_Production_Parameter_Pack.json 2>/dev/null || true
+      - name: Upload final Production outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-sliced-final-openpit-production-pack
+          path: |
+            real_pipeline/reports/
+            real_pipeline/ashare-lake/openpit_overrides/
+            real_pipeline/ashare-lake/openpit_features/
+            real_pipeline/calibration/
+          retention-days: 14
+          compression-level: 6
