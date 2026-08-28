@@ -2,12 +2,14 @@ name: Full Real Open-PIT Pipeline Rescue
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/full-real-pipeline-rescue.yml'
 
 permissions:
   contents: read
 
-# Manual rescue path only. It deliberately uses a different concurrency group
-# so creating this file does not cancel the currently running monolithic job.
 concurrency:
   group: full-real-openpit-rescue
   cancel-in-progress: false
@@ -29,17 +31,34 @@ jobs:
       - run: pip install -r requirements-full.txt
       - name: Lock 2008-2026 window
         run: python scripts/set_production_history_window.py --start 2008-01-01
-      - name: Initialize base lake
+      - name: Initialize base lake serially and deepen history
         run: |
+          set -euo pipefail
           rm -rf real_pipeline
           mkdir -p real_pipeline
           cd real_pipeline
+          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
-          asl config validate --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-          asl servers test --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
-          asl init --profile full --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-          asl delisted backfill --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-          asl derive adj_factors --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          # ashare-lake 0.6.0 can race Baostock's process-global login state when
+          # reference steps run in parallel. Force the orchestrator to one worker;
+          # this changes execution scheduling only, not dataset/model semantics.
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
+          asl servers test --config "$CFG" || true
+          for attempt in 1 2; do
+            if asl init --profile full --config "$CFG"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then exit 1; fi
+            sleep 30
+          done
+          asl delisted backfill --config "$CFG"
+          # Full profile does not guarantee a 2008 start. Deepen the critical
+          # market/event histories explicitly to the frozen Production window.
+          asl backfill daily_bars --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+          asl backfill index_bars --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+          asl backfill corporate_actions --start 2008-01-01 --end 2026-08-27 --config "$CFG"
+          asl derive adj_factors --config "$CFG"
       - name: Base status
         if: always()
         run: asl status --datasets --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
@@ -69,13 +88,25 @@ jobs:
           path: real_pipeline
       - name: Rebind config to current runner
         run: |
+          set -euo pipefail
           cd real_pipeline
+          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
-          asl config validate --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
       - name: Financial PIT backfill
         run: asl backfill financial_statement_items --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
-      - name: Announcement PIT backfill
-        run: asl backfill announcement_index --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+      - name: Announcement PIT backfill with bounded retry
+        run: |
+          set -euo pipefail
+          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          for attempt in 1 2 3; do
+            if asl backfill announcement_index --start 2008-01-01 --end 2026-08-27 --config "$CFG"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep $((attempt * 60))
+          done
       - name: Earnings schedule
         continue-on-error: true
         run: asl backfill earnings_disclosure_schedule --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
@@ -105,9 +136,12 @@ jobs:
           path: real_pipeline
       - name: Rebind config to current runner
         run: |
+          set -euo pipefail
           cd real_pipeline
+          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
-          asl config validate --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
       - name: Required valuation
         run: asl backfill valuation_metrics --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
       - name: Required macro
@@ -129,11 +163,12 @@ jobs:
       - name: Event datasets
         continue-on-error: true
         run: |
-          asl backfill share_unlock_schedule --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
-          asl backfill regulatory_events --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
-          asl backfill block_trades --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
-          asl backfill institutional_holdings --start 2008-01-01 --end 2026-08-27 --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml" || true
-          asl derive adj_factors --config "$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          CFG="$GITHUB_WORKSPACE/real_pipeline/configs/ashare-lake.toml"
+          asl backfill share_unlock_schedule --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill regulatory_events --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill block_trades --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl backfill institutional_holdings --start 2008-01-01 --end 2026-08-27 --config "$CFG" || true
+          asl derive adj_factors --config "$CFG"
       - name: Upload stage 2b checkpoint
         if: always()
         uses: actions/upload-artifact@v4
