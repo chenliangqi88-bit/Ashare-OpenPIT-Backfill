@@ -12,7 +12,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: full-real-openpit-rescue-ann-2009-2012
+  # v2 avoids a stale pending concurrency reservation from the previous run.
+  group: full-real-openpit-rescue-ann-2009-2012-v2
   cancel-in-progress: false
 
 env:
