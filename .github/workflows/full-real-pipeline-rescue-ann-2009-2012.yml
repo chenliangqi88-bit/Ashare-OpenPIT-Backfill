@@ -20,6 +20,7 @@ env:
   PYTHONUNBUFFERED: '1'
   CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
 
+# Triggered after the verified 2008 checkpoint; each year is isolated in its own job.
 jobs:
   announcement-2009:
     runs-on: ubuntu-latest
