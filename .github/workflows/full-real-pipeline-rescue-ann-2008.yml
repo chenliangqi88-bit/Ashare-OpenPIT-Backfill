@@ -1,0 +1,57 @@
+name: Full Real Open-PIT Rescue Announcement 2008
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/full-real-pipeline-rescue-ann-2008.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: full-real-openpit-rescue-ann-2008
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONUNBUFFERED: '1'
+  CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
+
+jobs:
+  announcement-2008:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - name: Restore financial checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: rescue-cont-stage2a-financial-disclosure
+          path: real_pipeline
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
+          run-id: 33173202879
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
+      - name: Announcement 2008 month-chunked with bounded retry
+        run: python scripts/backfill_announcement_monthly.py --year 2008 --config "$CFG" --attempts 6 --sleep-seconds 20
+      - name: Upload 2008 checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2008-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
