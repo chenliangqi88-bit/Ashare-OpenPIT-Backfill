@@ -1,4 +1,4 @@
-name: Full Real Open-PIT Rescue Announcements 2012-2013
+name: Full Real Open-PIT Rescue Announcements 2014-2017
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: full-real-openpit-rescue-ann-2012-2013-v6
+  group: full-real-openpit-rescue-ann-2014-2017-v1
   cancel-in-progress: false
 
 env:
@@ -20,15 +20,14 @@ env:
   PYTHONUNBUFFERED: '1'
   CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
 
-# 2009-2011 are verified complete in run 33256249899.
-# 2012-03-29 is verified complete. Runs 33295662261 and 33298467965 isolated
-# 2012-03-30 as the blocker: even one-day calls hit 600s and 1200s hard bounds.
-# ashare-lake 0.6.0 predates upstream commit d765ad52fd5ae6403dfd7f0ec3034174a51546ce,
-# which fixes this exact CNINFO failure mode: hasMore may stay true beyond the
-# server's own totalpages and cause unbounded pagination. Apply only that
-# upstream pagination termination guard; do not change PIT/model/gate semantics.
+# 2008-2013 announcement PIT is verified complete through rescue checkpoints.
+# Continue year-by-year from run 33300663577 / rescue-ann-2013-complete.
+# Keep the exact upstream CNINFO pagination termination hotfix and bounded daily
+# chunking already validated in 2012-2013. This changes orchestration only and
+# does not change PIT/model/H1/statistical gate semantics.
+
 jobs:
-  announcement-2012-resume:
+  announcement-2014:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -40,37 +39,36 @@ jobs:
       - run: pip install -r requirements-full.txt
       - name: Apply upstream CNINFO pagination termination fix
         run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
-      - name: Restore partial 2012 checkpoint through March 29
+      - name: Restore verified 2013 checkpoint
         uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2012-final-v3
+          name: rescue-ann-2013-complete
           path: real_pipeline
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
-          run-id: 33298467965
+          run-id: 33300663577
       - name: Rebind config
         run: |
           cd real_pipeline
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Resume 2012 from March 30 with upstream pagination fix
+      - name: Announcement 2014 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --start-date 2012-03-30 --end-date 2012-12-31
-          --chunk-days 1 --config "$CFG"
+          --year 2014 --chunk-days 1 --config "$CFG"
           --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
-      - name: Upload verified 2012 checkpoint
+      - name: Upload 2014 checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2012-final-v4
+          name: rescue-ann-2014-complete
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
 
-  announcement-2013:
-    needs: announcement-2012-resume
+  announcement-2015:
+    needs: announcement-2014
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -84,7 +82,7 @@ jobs:
         run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2012-final-v4
+          name: rescue-ann-2014-complete
           path: real_pipeline
       - name: Rebind config
         run: |
@@ -92,16 +90,90 @@ jobs:
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Announcement 2013 in bounded daily chunks
+      - name: Announcement 2015 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --year 2013 --chunk-days 1 --config "$CFG"
+          --year 2015 --chunk-days 1 --config "$CFG"
           --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
-      - name: Upload 2013 checkpoint
+      - name: Upload 2015 checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2013-complete
+          name: rescue-ann-2015-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+
+  announcement-2016:
+    needs: announcement-2015
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - name: Apply upstream CNINFO pagination termination fix
+        run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-ann-2015-complete
+          path: real_pipeline
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
+      - name: Announcement 2016 in bounded daily chunks
+        run: >-
+          python scripts/backfill_announcement_monthly.py
+          --year 2016 --chunk-days 1 --config "$CFG"
+          --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
+      - name: Upload 2016 checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2016-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+
+  announcement-2017:
+    needs: announcement-2016
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements-full.txt
+      - name: Apply upstream CNINFO pagination termination fix
+        run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: rescue-ann-2016-complete
+          path: real_pipeline
+      - name: Rebind config
+        run: |
+          cd real_pipeline
+          asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
+          sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
+          asl config validate --config "$CFG"
+      - name: Announcement 2017 in bounded daily chunks
+        run: >-
+          python scripts/backfill_announcement_monthly.py
+          --year 2017 --chunk-days 1 --config "$CFG"
+          --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
+      - name: Upload 2017 checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2017-complete
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
