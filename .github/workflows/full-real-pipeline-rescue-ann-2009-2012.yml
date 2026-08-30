@@ -12,7 +12,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: full-real-openpit-rescue-ann-2012-2013-v5
+  group: full-real-openpit-rescue-ann-2012-2013-v6
   cancel-in-progress: false
 
 env:
@@ -21,11 +21,12 @@ env:
   CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
 
 # 2009-2011 are verified complete in run 33256249899.
-# Run 33295662261 verified 2012-03-29 (2263 rows) and uploaded an always()
-# checkpoint after 2012-03-30 repeatedly exceeded the 600-second provider bound.
-# Resume exactly at 2012-03-30. Keep one-day chunks, but allow a still-bounded
-# 1200-second provider window with two attempts. A failed day remains hard FAIL;
-# nothing is skipped or converted to PASS.
+# 2012-03-29 is verified complete. Runs 33295662261 and 33298467965 isolated
+# 2012-03-30 as the blocker: even one-day calls hit 600s and 1200s hard bounds.
+# ashare-lake 0.6.0 predates upstream commit d765ad52fd5ae6403dfd7f0ec3034174a51546ce,
+# which fixes this exact CNINFO failure mode: hasMore may stay true beyond the
+# server's own totalpages and cause unbounded pagination. Apply only that
+# upstream pagination termination guard; do not change PIT/model/gate semantics.
 jobs:
   announcement-2012-resume:
     runs-on: ubuntu-latest
@@ -37,21 +38,23 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements-full.txt
+      - name: Apply upstream CNINFO pagination termination fix
+        run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
       - name: Restore partial 2012 checkpoint through March 29
         uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2012-final-v2
+          name: rescue-ann-2012-final-v3
           path: real_pipeline
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
-          run-id: 33295662261
+          run-id: 33298467965
       - name: Rebind config
         run: |
           cd real_pipeline
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Resume 2012 from March 30 in bounded daily chunks
+      - name: Resume 2012 from March 30 with upstream pagination fix
         run: >-
           python scripts/backfill_announcement_monthly.py
           --start-date 2012-03-30 --end-date 2012-12-31
@@ -61,7 +64,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2012-final-v3
+          name: rescue-ann-2012-final-v4
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
@@ -77,9 +80,11 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements-full.txt
+      - name: Apply upstream CNINFO pagination termination fix
+        run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2012-final-v3
+          name: rescue-ann-2012-final-v4
           path: real_pipeline
       - name: Rebind config
         run: |
