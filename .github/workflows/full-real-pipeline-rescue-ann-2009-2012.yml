@@ -12,7 +12,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: full-real-openpit-rescue-ann-2012-2013-v4
+  group: full-real-openpit-rescue-ann-2012-2013-v5
   cancel-in-progress: false
 
 env:
@@ -21,10 +21,11 @@ env:
   CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
 
 # 2009-2011 are verified complete in run 33256249899.
-# Run 33291562266 verified 2012-03-01..2012-03-28 and uploaded an always()
-# checkpoint after 2012-03-29..31 repeatedly stalled. Resume exactly at
-# 2012-03-29 with one-day chunks and bounded subprocess timeouts. The helper
-# may only split failed multi-day ranges; single-day failure remains a hard FAIL.
+# Run 33295662261 verified 2012-03-29 (2263 rows) and uploaded an always()
+# checkpoint after 2012-03-30 repeatedly exceeded the 600-second provider bound.
+# Resume exactly at 2012-03-30. Keep one-day chunks, but allow a still-bounded
+# 1200-second provider window with two attempts. A failed day remains hard FAIL;
+# nothing is skipped or converted to PASS.
 jobs:
   announcement-2012-resume:
     runs-on: ubuntu-latest
@@ -36,31 +37,31 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements-full.txt
-      - name: Restore partial 2012 checkpoint through March 28
+      - name: Restore partial 2012 checkpoint through March 29
         uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2012-final
+          name: rescue-ann-2012-final-v2
           path: real_pipeline
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
-          run-id: 33291562266
+          run-id: 33295662261
       - name: Rebind config
         run: |
           cd real_pipeline
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Resume 2012 from March 29 in bounded daily chunks
+      - name: Resume 2012 from March 30 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --start-date 2012-03-29 --end-date 2012-12-31
+          --start-date 2012-03-30 --end-date 2012-12-31
           --chunk-days 1 --config "$CFG"
-          --attempts 3 --sleep-seconds 20 --timeout-seconds 600
+          --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
       - name: Upload verified 2012 checkpoint
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2012-final-v2
+          name: rescue-ann-2012-final-v3
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
@@ -78,7 +79,7 @@ jobs:
       - run: pip install -r requirements-full.txt
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2012-final-v2
+          name: rescue-ann-2012-final-v3
           path: real_pipeline
       - name: Rebind config
         run: |
@@ -90,7 +91,7 @@ jobs:
         run: >-
           python scripts/backfill_announcement_monthly.py
           --year 2013 --chunk-days 1 --config "$CFG"
-          --attempts 3 --sleep-seconds 20 --timeout-seconds 600
+          --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
       - name: Upload 2013 checkpoint
         if: always()
         uses: actions/upload-artifact@v4
