@@ -1,4 +1,4 @@
-name: Full Real Open-PIT Rescue Announcements 2014-2017
+name: Full Real Open-PIT Rescue Announcements 2015 Segmented
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: full-real-openpit-rescue-ann-2014-2017-v1
+  group: full-real-openpit-rescue-ann-2015-segmented-v2
   cancel-in-progress: false
 
 env:
@@ -20,16 +20,17 @@ env:
   PYTHONUNBUFFERED: '1'
   CFG: ${{ github.workspace }}/real_pipeline/configs/ashare-lake.toml
 
-# 2008-2013 announcement PIT is verified complete through rescue checkpoints.
-# Continue year-by-year from run 33300663577 / rescue-ann-2013-complete.
-# Keep the exact upstream CNINFO pagination termination hotfix and bounded daily
-# chunking already validated in 2012-2013. This changes orchestration only and
-# does not change PIT/model/H1/statistical gate semantics.
+# 2008-2014 announcement PIT is verified complete. The former 2015 annual job
+# was cancelled near the GitHub job-duration ceiling and its always-uploaded
+# artifact is only a partial checkpoint. To avoid ambiguous duplicate/resume
+# state, restart ONLY the failed 2015 stage from the verified 2014 checkpoint,
+# split into independent quarterly jobs. This changes orchestration only; PIT,
+# V3.0.3-H1 model semantics, statistical thresholds, and gates are untouched.
 
 jobs:
-  announcement-2014:
+  announcement-2015-q1:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,38 +40,48 @@ jobs:
       - run: pip install -r requirements-full.txt
       - name: Apply upstream CNINFO pagination termination fix
         run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
-      - name: Restore verified 2013 checkpoint
+      - name: Restore verified 2014 checkpoint
         uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2013-complete
+          name: rescue-ann-2014-complete
           path: real_pipeline
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: chenliangqi88-bit/Ashare-OpenPIT-Backfill
-          run-id: 33300663577
+          run-id: 33319007423
       - name: Rebind config
         run: |
           cd real_pipeline
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Announcement 2014 in bounded daily chunks
+      - name: Announcement 2015 Q1 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --year 2014 --chunk-days 1 --config "$CFG"
+          --start-date 2015-01-01 --end-date 2015-03-31
+          --chunk-days 1 --config "$CFG"
           --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
-      - name: Upload 2014 checkpoint
-        if: always()
+      - name: Upload verified Q1 checkpoint
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2014-complete
+          name: rescue-ann-2015-q1-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+      - name: Upload Q1 partial checkpoint on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2015-q1-partial
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
 
-  announcement-2015:
-    needs: announcement-2014
+  announcement-2015-q2:
+    needs: announcement-2015-q1
+    if: needs.announcement-2015-q1.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -82,7 +93,7 @@ jobs:
         run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2014-complete
+          name: rescue-ann-2015-q1-complete
           path: real_pipeline
       - name: Rebind config
         run: |
@@ -90,24 +101,34 @@ jobs:
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Announcement 2015 in bounded daily chunks
+      - name: Announcement 2015 Q2 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --year 2015 --chunk-days 1 --config "$CFG"
+          --start-date 2015-04-01 --end-date 2015-06-30
+          --chunk-days 1 --config "$CFG"
           --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
-      - name: Upload 2015 checkpoint
-        if: always()
+      - name: Upload verified Q2 checkpoint
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2015-complete
+          name: rescue-ann-2015-q2-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+      - name: Upload Q2 partial checkpoint on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2015-q2-partial
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
 
-  announcement-2016:
-    needs: announcement-2015
+  announcement-2015-q3:
+    needs: announcement-2015-q2
+    if: needs.announcement-2015-q2.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -119,7 +140,7 @@ jobs:
         run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2015-complete
+          name: rescue-ann-2015-q2-complete
           path: real_pipeline
       - name: Rebind config
         run: |
@@ -127,24 +148,34 @@ jobs:
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Announcement 2016 in bounded daily chunks
+      - name: Announcement 2015 Q3 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --year 2016 --chunk-days 1 --config "$CFG"
+          --start-date 2015-07-01 --end-date 2015-09-30
+          --chunk-days 1 --config "$CFG"
           --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
-      - name: Upload 2016 checkpoint
-        if: always()
+      - name: Upload verified Q3 checkpoint
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2016-complete
+          name: rescue-ann-2015-q3-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+      - name: Upload Q3 partial checkpoint on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2015-q3-partial
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
 
-  announcement-2017:
-    needs: announcement-2016
+  announcement-2015-q4:
+    needs: announcement-2015-q3
+    if: needs.announcement-2015-q3.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -156,7 +187,7 @@ jobs:
         run: python scripts/apply_ashare_lake_cninfo_pagination_hotfix.py
       - uses: actions/download-artifact@v4
         with:
-          name: rescue-ann-2016-complete
+          name: rescue-ann-2015-q3-complete
           path: real_pipeline
       - name: Rebind config
         run: |
@@ -164,16 +195,25 @@ jobs:
           asl config init --data-root "$GITHUB_WORKSPACE/real_pipeline/ashare-lake" --force
           sed -i -E 's/^workers[[:space:]]*=[[:space:]]*[0-9]+/workers = 1/' "$CFG"
           asl config validate --config "$CFG"
-      - name: Announcement 2017 in bounded daily chunks
+      - name: Announcement 2015 Q4 in bounded daily chunks
         run: >-
           python scripts/backfill_announcement_monthly.py
-          --year 2017 --chunk-days 1 --config "$CFG"
+          --start-date 2015-10-01 --end-date 2015-12-31
+          --chunk-days 1 --config "$CFG"
           --attempts 2 --sleep-seconds 30 --timeout-seconds 1200
-      - name: Upload 2017 checkpoint
-        if: always()
+      - name: Upload verified 2015 checkpoint
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: rescue-ann-2017-complete
+          name: rescue-ann-2015-verified-complete
+          path: real_pipeline/
+          retention-days: 3
+          compression-level: 1
+      - name: Upload Q4 partial checkpoint on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescue-ann-2015-q4-partial
           path: real_pipeline/
           retention-days: 3
           compression-level: 1
